@@ -4,109 +4,116 @@ import matplotlib.pyplot as plt
 from sklearn.cluster import DBSCAN
 from scipy.sparse import lil_matrix
 
-# Funkcja do przetwarzania sekwencji
+
 def process_sequence(filename, chunk_size=5000, scale_factor=500, eps=10, min_samples=5):
     matrix_data = []
 
-    print("Rozpoczynanie przetwarzania pliku:", filename)
+    print("Processing file:", filename)
 
-    for chunk in pd.read_csv(filename, header=None, sep='\s{2,}', names=range(3), chunksize=chunk_size, engine='python'):
-        print("Przetwarzanie chunku:")
-        print(chunk.head())  # Dodajemy wyświetlanie pierwszych kilku wierszy chunku
-        # Znajdowanie nazw tabel
-        table_names = ["> gi|12057211|gb|AE003849.1|", "> gi|12057211|gb|AE003849.1| Reverse"]
-        groups = chunk[0].isin(table_names).cumsum()
-        tables = {g.iloc[0, 0]: g.iloc[1:] for k, g in chunk.groupby(groups)}
+    for chunk in pd.read_csv(
+        filename,
+        header=None,
+        sep=r"\s+",
+        names=range(3),
+        chunksize=chunk_size,
+        engine="python"
+    ):
 
-        # Przetwarzanie tabeli "> gi|12057211|gb|AE003849.1|"
-        if "> gi|12057211|gb|AE003849.1|" in tables:
-            table = tables["> gi|12057211|gb|AE003849.1|"]
+        # --- znajdź wszystkie nagłówki zaczynające się od ">"
+        table_names = chunk[0][chunk[0].astype(str).str.startswith(">")].unique().tolist()
+
+        if not table_names:
+            continue
+
+        # --- grupowanie danych pod nagłówkami
+        groups = chunk[0].astype(str).str.startswith(">").cumsum()
+        tables = {g.iloc[0, 0]: g.iloc[1:] for _, g in chunk.groupby(groups)}
+
+        # --- przetwarzanie KAŻDEJ tabeli (forward + reverse)
+        for table_name, table in tables.items():
+
+            if table.empty:
+                continue
+
             x_values = table[0].astype(int)
             y_values = table[1].astype(int)
             num_points = table[2].astype(int)
+
             for x, y, num in zip(x_values, y_values, num_points):
                 for i in range(num):
                     matrix_data.append([x + i, y + i])
 
-        # Przetwarzanie tabeli "> gi|12057211|gb|AE003849.1| Reverse"
-        if "> gi|12057211|gb|AE003849.1| Reverse" in tables:
-            table_reverse = tables["> gi|12057211|gb|AE003849.1| Reverse"]
-            x_values_reverse = table_reverse[0].astype(int)
-            y_values_reverse = table_reverse[1].astype(int)
-            num_points_reverse = table_reverse[2].astype(int)
-            for x, y, num in zip(x_values_reverse, y_values_reverse, num_points_reverse):
-                for i in range(num):
-                    matrix_data.append([x + i, y + i])
+    print("Total points:", len(matrix_data))
 
-    print("Przetwarzanie zakończone. Liczba punktów danych:", len(matrix_data))
-
-    # Przekształcenie danych do macierzy numpy
     matrix_data = np.array(matrix_data)
 
-    # Podział danych na kolumny
+    if matrix_data.size == 0:
+        print("No data found in file.")
+        return
+
+    # --- coordinates
     x = matrix_data[:, 0] - 1
     y = matrix_data[:, 1] - 1
 
-    # Zmniejszenie rozdzielczości danych (skalowanie)
+
+    #  AUTOMATIC SCALE FACTOR 
+
+    max_coord = max(x.max(), y.max())
+
+    if max_coord < 1000:
+        scale_factor = 1
+    elif max_coord < 10000:
+        scale_factor = 10
+    else:
+        scale_factor = 100
+
+    print("Auto scale_factor:", scale_factor)
+
+    # --- downsampling
     x_scaled = x // scale_factor
     y_scaled = y // scale_factor
 
-    # Wartość maksymalna dla osi X i Y po skalowaniu
-    max_x_scaled = int(np.max(x_scaled))
-    max_y_scaled = int(np.max(y_scaled))
+    max_x = int(np.max(x_scaled))
+    max_y = int(np.max(y_scaled))
 
-    # Utworzenie rzadkiej macierzy
-    sparse_matrix = lil_matrix((max_x_scaled + 1, max_y_scaled + 1))
+    # --- sparse matrix
+    sparse_matrix = lil_matrix((max_x + 1, max_y + 1))
 
-    # Wypełnienie rzadkiej macierzy wartościami
     for i in range(len(x_scaled)):
         sparse_matrix[x_scaled[i], y_scaled[i]] = 1
 
-    # Konwersja rzadkiej macierzy na macierz gęstą
     dense_matrix = sparse_matrix.toarray()
 
-    print("Macierz gęsta wygenerowana. Rozmiar macierzy:", dense_matrix.shape)
+    print("Matrix size:", dense_matrix.shape)
 
-    # Klasteryzacja DBSCAN z nowymi parametrami
-    try:
-        dbscan = DBSCAN(eps=eps, min_samples=min_samples)
-        
-        # Klasteryzacja punktów
-        labels = dbscan.fit_predict(np.column_stack((x_scaled, y_scaled)))
-        
-        print("Klasteryzacja zakończona. Liczba klastrów:", len(set(labels)) - (1 if -1 in labels else 0))
-    except Exception as e:
-        print("Wystąpił błąd podczas klasteryzacji:", e)
-        return
+    # --- DBSCAN
+    dbscan = DBSCAN(eps=eps, min_samples=min_samples)
+    labels = dbscan.fit_predict(np.column_stack((x_scaled, y_scaled)))
 
-    # Tworzenie wykresów macierzy i klasteryzacji
+    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+    print("Detected clusters:", n_clusters)
+
+    # --- plotting
     fig, axes = plt.subplots(1, 2, figsize=(15, 7))
 
-    # Wykres macierzy
-    axes[0].imshow(dense_matrix, cmap='viridis', origin='lower')
-    axes[0].set_xticks(np.arange(0, max_y_scaled + 1, max(1, max_y_scaled // 10)))
-    axes[0].set_yticks(np.arange(0, max_x_scaled + 1, max(1, max_x_scaled // 10)))
-    axes[0].set_xticklabels(np.arange(0, max_y_scaled + 1, max(1, max_y_scaled // 10)))
-    axes[0].set_yticklabels(np.arange(0, max_x_scaled + 1, max(1, max_x_scaled // 10)))
-    axes[0].set_xlabel('Y')
-    axes[0].set_ylabel('X')
-    axes[0].set_title('Macierz - Cała sekwencja')
-    axes[0].grid(color='black', linewidth=0.5)
+    axes[0].imshow(dense_matrix, origin="lower", cmap="viridis")
+    axes[0].set_title("Dot matrix")
+    axes[0].set_xlabel("Y")
+    axes[0].set_ylabel("X")
 
-    # Wykres klasteryzacji
-    scatter = axes[1].scatter(y_scaled, x_scaled, c=labels, cmap='viridis', s=10)
-    axes[1].set_xlabel('Y')
-    axes[1].set_ylabel('X')
-    axes[1].set_title('Klasteryzacja - Cała sekwencja')
-    axes[1].grid(color='black', linewidth=0.5)
+    scatter = axes[1].scatter(
+        y_scaled, x_scaled, c=labels, cmap="viridis", s=10
+    )
+    axes[1].set_title("DBSCAN clustering")
+    axes[1].set_xlabel("Y")
+    axes[1].set_ylabel("X")
+
     fig.colorbar(scatter, ax=axes[1])
 
-    # Zapisanie wykresów do plików
-    plt.savefig("macierz_klasteryzacja.png")
-
-    # Wyświetlenie wykresów
     plt.tight_layout()
+    plt.savefig("rand_mums_dbscan.png")
     plt.show()
 
-# Wykonanie analizy sekwencji dla dużego pliku
-process_sequence("C:/Julia/Praca_Licencjacka/9a5c-temecula_0.mums")
+
+# --- URUCHOMIENIE ANALIZY
+process_sequence("rand.mums")
