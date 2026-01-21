@@ -1,108 +1,112 @@
-from sklearn.cluster import DBSCAN
+import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import pandas as pd
+from sklearn.cluster import DBSCAN
+from scipy.sparse import lil_matrix
 
-df = pd.read_csv("rand.mums", header=None, sep='\s{2,}', names=range(3))
+# Funkcja do przetwarzania sekwencji
+def process_sequence(filename, chunk_size=5000, scale_factor=500, eps=10, min_samples=5):
+    matrix_data = []
 
-table_names = ["> 1p_2s_rand_100nt", "> 1p_2s_rand_100nt Reverse"]
+    print("Rozpoczynanie przetwarzania pliku:", filename)
 
-groups = df[0].isin(table_names).cumsum()
+    for chunk in pd.read_csv(filename, header=None, sep='\s{2,}', names=range(3), chunksize=chunk_size, engine='python'):
+        print("Przetwarzanie chunku:")
+        print(chunk.head())  # Dodajemy wyświetlanie pierwszych kilku wierszy chunku
+        # Znajdowanie nazw tabel
+        table_names = ["> gi|12057211|gb|AE003849.1|", "> gi|12057211|gb|AE003849.1| Reverse"]
+        groups = chunk[0].isin(table_names).cumsum()
+        tables = {g.iloc[0, 0]: g.iloc[1:] for k, g in chunk.groupby(groups)}
 
-tables = {g.iloc[0, 0]: g.iloc[1:] for k, g in df.groupby(groups)}
+        # Przetwarzanie tabeli "> gi|12057211|gb|AE003849.1|"
+        if "> gi|12057211|gb|AE003849.1|" in tables:
+            table = tables["> gi|12057211|gb|AE003849.1|"]
+            x_values = table[0].astype(int)
+            y_values = table[1].astype(int)
+            num_points = table[2].astype(int)
+            for x, y, num in zip(x_values, y_values, num_points):
+                for i in range(num):
+                    matrix_data.append([x + i, y + i])
 
-tables_new = {}
-for key, value in tables.items():
-    tables_new[key] = value.copy()
+        # Przetwarzanie tabeli "> gi|12057211|gb|AE003849.1| Reverse"
+        if "> gi|12057211|gb|AE003849.1| Reverse" in tables:
+            table_reverse = tables["> gi|12057211|gb|AE003849.1| Reverse"]
+            x_values_reverse = table_reverse[0].astype(int)
+            y_values_reverse = table_reverse[1].astype(int)
+            num_points_reverse = table_reverse[2].astype(int)
+            for x, y, num in zip(x_values_reverse, y_values_reverse, num_points_reverse):
+                for i in range(num):
+                    matrix_data.append([x + i, y + i])
 
-# Wybór tabeli "1p_2s_rand_100nt"
-table = tables_new["> 1p_2s_rand_100nt"]
-print(table)
+    print("Przetwarzanie zakończone. Liczba punktów danych:", len(matrix_data))
 
-# Wybór tabeli "1p_2s_rand_100nt Reverse"
-table_reverse = tables_new["> 1p_2s_rand_100nt Reverse"]
-print(table_reverse)
+    # Przekształcenie danych do macierzy numpy
+    matrix_data = np.array(matrix_data)
 
-# Konwersja danych na liczby całkowite dla "1p_2s_rand_100nt"
-x_values = table[0].astype(int)
-y_values = table[1].astype(int)
-num_points = table[2].astype(int)
+    # Podział danych na kolumny
+    x = matrix_data[:, 0] - 1
+    y = matrix_data[:, 1] - 1
 
-# Konwersja danych na liczby całkowite dla "1p_2s_rand_100nt Reverse"
-x_values_reverse = table_reverse[0].astype(int)
-y_values_reverse = table_reverse[1].astype(int)
-num_points_reverse = table_reverse[2].astype(int)
+    # Zmniejszenie rozdzielczości danych (skalowanie)
+    x_scaled = x // scale_factor
+    y_scaled = y // scale_factor
 
-# Tworzenie macierzy z wartościami dla "1p_2s_rand_100nt"
-matrix_data = []
-for x, y, num in zip(x_values, y_values, num_points):
-    for i in range(num):
-        matrix_data.append([x + i, y + i])
+    # Wartość maksymalna dla osi X i Y po skalowaniu
+    max_x_scaled = int(np.max(x_scaled))
+    max_y_scaled = int(np.max(y_scaled))
 
-# Tworzenie macierzy z wartościami dla "1p_2s_rand_100nt Reverse"
-matrix_data_reverse = []
-for x, y, num in zip(x_values_reverse, y_values_reverse, num_points_reverse):
-    for i in range(num):
-        matrix_data_reverse.append([x + i, y + i])
+    # Utworzenie rzadkiej macierzy
+    sparse_matrix = lil_matrix((max_x_scaled + 1, max_y_scaled + 1))
 
-# Przekształcenie danych do macierzy numpy dla "1p_2s_rand_100nt"
-matrix_data = np.array(matrix_data)
+    # Wypełnienie rzadkiej macierzy wartościami
+    for i in range(len(x_scaled)):
+        sparse_matrix[x_scaled[i], y_scaled[i]] = 1
 
-# Przekształcenie danych do macierzy numpy dla "1p_2s_rand_100nt Reverse"
-matrix_data_reverse = np.array(matrix_data_reverse)
+    # Konwersja rzadkiej macierzy na macierz gęstą
+    dense_matrix = sparse_matrix.toarray()
 
-# Podział danych na kolumny dla "1p_2s_rand_100nt"
-x = matrix_data[:, 0] - 1
-y = matrix_data[:, 1] - 1
+    print("Macierz gęsta wygenerowana. Rozmiar macierzy:", dense_matrix.shape)
 
-# Podział danych na kolumny dla "1p_2s_rand_100nt Reverse"
-x_reverse = matrix_data_reverse[:, 0] - 1
-y_reverse = matrix_data_reverse[:, 1] - 1
+    # Klasteryzacja DBSCAN z nowymi parametrami
+    try:
+        dbscan = DBSCAN(eps=eps, min_samples=min_samples)
+        
+        # Klasteryzacja punktów
+        labels = dbscan.fit_predict(np.column_stack((x_scaled, y_scaled)))
+        
+        print("Klasteryzacja zakończona. Liczba klastrów:", len(set(labels)) - (1 if -1 in labels else 0))
+    except Exception as e:
+        print("Wystąpił błąd podczas klasteryzacji:", e)
+        return
 
-# Wartość maksymalna dla osi X i Y dla "1p_2s_rand_100nt"
-max_x = int(np.max(x))
-max_y = int(np.max(y))
+    # Tworzenie wykresów macierzy i klasteryzacji
+    fig, axes = plt.subplots(1, 2, figsize=(15, 7))
 
-# Wartość maksymalna dla osi X i Y dla "1p_2s_rand_100nt Reverse"
-max_x_reverse = int(np.max(x_reverse))
-max_y_reverse = int(np.max(y_reverse))
+    # Wykres macierzy
+    axes[0].imshow(dense_matrix, cmap='viridis', origin='lower')
+    axes[0].set_xticks(np.arange(0, max_y_scaled + 1, max(1, max_y_scaled // 10)))
+    axes[0].set_yticks(np.arange(0, max_x_scaled + 1, max(1, max_x_scaled // 10)))
+    axes[0].set_xticklabels(np.arange(0, max_y_scaled + 1, max(1, max_y_scaled // 10)))
+    axes[0].set_yticklabels(np.arange(0, max_x_scaled + 1, max(1, max_x_scaled // 10)))
+    axes[0].set_xlabel('Y')
+    axes[0].set_ylabel('X')
+    axes[0].set_title('Macierz - Cała sekwencja')
+    axes[0].grid(color='black', linewidth=0.5)
 
-# Utworzenie macierzy dla "1p_2s_rand_100nt"
-matrix = np.zeros((max_x + 1, max_y + 1))
+    # Wykres klasteryzacji
+    scatter = axes[1].scatter(y_scaled, x_scaled, c=labels, cmap='viridis', s=10)
+    axes[1].set_xlabel('Y')
+    axes[1].set_ylabel('X')
+    axes[1].set_title('Klasteryzacja - Cała sekwencja')
+    axes[1].grid(color='black', linewidth=0.5)
+    fig.colorbar(scatter, ax=axes[1])
 
-# Utworzenie macierzy dla "1p_2s_rand_100nt Reverse"
-matrix_reverse = np.zeros((max_x_reverse + 1, max_y_reverse + 1))
+    # Zapisanie wykresów do plików
+    plt.savefig("macierz_klasteryzacja.png")
 
-# Wypełnienie macierzy wartościami dla "1p_2s_rand_100nt"
-for i in range(len(x)):
-    matrix[x[i], y[i]] = 1
+    # Wyświetlenie wykresów
+    plt.tight_layout()
+    plt.show()
 
-# Wypełnienie macierzy wartościami dla "1p_2s_rand_100nt Reverse"
-for i in range(len(x_reverse)):
-    matrix_reverse[x_reverse[i], y_reverse[i]] = 1
-
-# Tworzenie wykresu dla "1p_2s_rand_100nt"
-fig, ax = plt.subplots()
-ax.imshow(matrix, cmap='binary', origin='lower', extent=[0, max_y+1, 0, max_x+1])
-ax.scatter(y, x, facecolors='black', edgecolors='none', s=10)
-ax.set_xlabel('Y')
-ax.set_ylabel('X')
-ax.set_title('Macierz - 1p_2s_rand_100nt')
-ax.grid(color='black', linewidth=0.5)
-
-# Zapis wykresu do pliku
-plt.savefig('wykres_1p_2s_rand_100nt.png', bbox_inches='tight')
-plt.close()
-
-# Tworzenie wykresu dla "1p_2s_rand_100nt Reverse"
-fig, ax = plt.subplots()
-ax.imshow(matrix_reverse, cmap='binary', origin='lower', extent=[0, max_y_reverse+1, 0, max_x_reverse+1])
-ax.scatter(y_reverse, x_reverse, facecolors='black', edgecolors='none', s=10)
-ax.set_xlabel('Y')
-ax.set_ylabel('X')
-ax.set_title('Macierz - 1p_2s_rand_100nt Reverse')
-ax.grid(color='black', linewidth=0.5)
-
-# Zapis wykresu do pliku
-plt.savefig('wykres_1p_2s_rand_100nt_reverse.png', bbox_inches='tight')
-plt.close()
+# Wykonanie analizy sekwencji dla dużego pliku
+process_sequence("C:/Julia/Praca_Licencjacka/9a5c-temecula_0.mums")
